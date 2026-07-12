@@ -1,0 +1,170 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isOwner(userId) { return request.auth.uid == userId; }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['displayName', 'createdAt']) &&
+             data.displayName is string && data.displayName.size() <= 50 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+             (!("rank" in data) || data.rank is number) &&
+             (!("points" in data) || (data.points is number && data.points >= 0)) &&
+             (!("photoURL" in data) || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+             (!("lastClaimDate" in data) || (data.lastClaimDate is string && data.lastClaimDate.size() <= 20)) &&
+             (!("streakCount" in data) || data.streakCount is number) &&
+             (!("aiLevel" in data) || data.aiLevel is number) &&
+             (!("aiWins" in data) || data.aiWins is number) &&
+             data.createdAt is number;
+    }
+
+    match /users2/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming()) && incoming().keys().size() <= 10;
+      allow update: if isSignedIn() && isValidUserProfile(incoming()) && incoming().createdAt == existing().createdAt && (
+        (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'rank', 'points', 'lastClaimDate', 'streakCount', 'aiLevel', 'aiWins']) && (!incoming().diff(existing()).affectedKeys().hasAny(['points']) || (incoming().get('points', 0) - existing().get('points', 0)) <= 50000) && (!incoming().diff(existing()).affectedKeys().hasAny(['aiLevel']) || (incoming().get('aiLevel', 0) - existing().get('aiLevel', 0)) <= 1)) ||
+        (!isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['points']))
+      );
+    }
+
+    function isValidFriend(data) {
+      return data.keys().hasAll(['friendId', 'status', 'createdAt']) &&
+             data.friendId is string && data.friendId.size() <= 128 &&
+             data.status in ['pending', 'accepted'] &&
+             data.createdAt is number;
+    }
+
+    match /users2/{userId}/friends/{friendId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isOwner(existing().friendId));
+      allow create: if isSignedIn() && (isOwner(userId) || isOwner(incoming().friendId)) && isValidId(friendId) && isValidFriend(incoming()) && incoming().keys().size() == 3;
+      allow update: if isSignedIn() && (isOwner(userId) || isOwner(existing().friendId)) && isValidFriend(incoming()) && incoming().createdAt == existing().createdAt && incoming().friendId == existing().friendId && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if isSignedIn() && (isOwner(userId) || isOwner(existing().friendId));
+    }
+
+    function isValidUserCard(data) {
+      return data.keys().hasAll(['cardId', 'acquiredAt']) &&
+             data.cardId is string && data.cardId.size() <= 128 &&
+             (!("cardName" in data) || (data.cardName is string && data.cardName.size() <= 100)) &&
+             (!("level" in data) || data.level is number) &&
+             data.acquiredAt is number;
+    }
+
+    match /users2/{userId}/cards2/{userCardId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(userId) && isValidId(userCardId) && isValidUserCard(incoming()) && incoming().keys().size() <= 4 && existsAfter(/databases/$(database)/documents/cards2/$(incoming().cardId));
+      allow update: if isSignedIn() && isOwner(userId) && isValidUserCard(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['level', 'cardName']);
+      allow delete: if isSignedIn() && isOwner(userId);
+    }
+
+    function isValidCard(data) {
+      return data.keys().hasAll(['name', 'anime', 'power', 'resistance', 'rarity', 'imageURL']) &&
+             data.name is string && data.name.size() <= 100 &&
+             data.anime is string && data.anime.size() <= 100 &&
+             data.power is number &&
+             data.resistance is number &&
+             data.rarity in ['common', 'rare', 'epic', 'legendary', 'mythic'] &&
+             data.imageURL is string && data.imageURL.size() <= 500 &&
+             (!("isShiny" in data) || data.isShiny is bool) &&
+             (!("createdAt" in data) || data.createdAt is number) &&
+             (!("searchQuery" in data) || (data.searchQuery is string && data.searchQuery.size() <= 100));
+    }
+    match /cards2/{cardId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(cardId) && isValidCard(incoming()) && incoming().keys().size() <= 10;
+      allow update: if isSignedIn();
+    }
+
+    function isValidMarketListing(data) {
+      return data.keys().hasAll(['sellerId', 'userCardId', 'price', 'status', 'createdAt']) &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.userCardId is string && data.userCardId.size() <= 128 &&
+             data.price is number &&
+             data.status in ['open', 'sold', 'cancelled'] &&
+             data.createdAt is number;
+    }
+
+    match /market2/{listingId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(listingId) && isValidMarketListing(incoming()) && incoming().sellerId == request.auth.uid && incoming().status == 'open' && incoming().keys().size() == 5;
+      allow update: if isSignedIn() && isValidMarketListing(incoming()) && incoming().createdAt == existing().createdAt && incoming().sellerId == existing().sellerId && incoming().userCardId == existing().userCardId && (
+        (isOwner(existing().sellerId) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'price'])) ||
+        (!isOwner(existing().sellerId) && existing().status == 'open' && incoming().status == 'sold' && incoming().diff(existing()).affectedKeys().hasOnly(['status']))
+      );
+    }
+
+    function isValidBattle(data) {
+      return data.keys().hasAll(['player1Id', 'status', 'createdAt', 'updatedAt']) &&
+             data.player1Id is string && data.player1Id.size() <= 128 &&
+             (!("player2Id" in data) || (data.player2Id is string && data.player2Id.size() <= 128)) &&
+             data.status in ['waiting', 'playing', 'finished'] &&
+             (!("winnerId" in data) || (data.winnerId is string && data.winnerId.size() <= 128)) &&
+             (!("turn" in data) || (data.turn is string && data.turn.size() <= 128)) &&
+             (!("state" in data) || (data.state is string && data.state.size() <= 10000)) &&
+             data.createdAt is number &&
+             data.updatedAt is number;
+    }
+
+    match /battles2/{battleId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(battleId) && isValidBattle(incoming()) && incoming().player1Id == request.auth.uid && incoming().status == 'waiting' && incoming().keys().size() <= 10;
+      allow update: if isSignedIn() && isValidBattle(incoming()) && incoming().createdAt == existing().createdAt && incoming().player1Id == existing().player1Id && (
+        (existing().status == 'waiting' && incoming().player2Id == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['player2Id', 'status', 'updatedAt', 'turn', 'state'])) ||
+        (existing().status == 'playing' && (isOwner(existing().player1Id) || isOwner(existing().player2Id)) && incoming().diff(existing()).affectedKeys().hasOnly(['state', 'turn', 'updatedAt', 'status', 'winnerId'])) ||
+        (existing().status == 'finished' && false) // terminal state
+      );
+      allow delete: if isSignedIn() && isOwner(existing().player1Id) && existing().status == 'waiting';
+    }
+
+    function isValidGroup(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'createdAt']) &&
+             data.ownerId is string && data.ownerId.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             (!("description" in data) || (data.description is string && data.description.size() <= 500)) &&
+             data.createdAt is number;
+    }
+
+    match /groups2/{groupId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(groupId) && isValidGroup(incoming()) && incoming().ownerId == request.auth.uid && incoming().keys().size() <= 4;
+      allow update: if isSignedIn() && isOwner(existing().ownerId) && isValidGroup(incoming()) && incoming().createdAt == existing().createdAt && incoming().ownerId == existing().ownerId && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description']);
+    }
+
+    function isValidGroupMember(data) {
+      return data.keys().hasAll(['userId', 'role', 'joinedAt']) &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.role in ['admin', 'member'] &&
+             data.joinedAt is number;
+    }
+
+    match /groups2/{groupId}/members/{memberId} {
+      allow read: if isSignedIn(); // We can let any signed in user read members or maybe only group members. Let's keep it simple for now.
+      allow create: if isSignedIn() && isValidId(memberId) && isValidGroupMember(incoming()) && (incoming().userId == request.auth.uid || isOwner(get(/databases/$(database)/documents/groups2/$(groupId)).data.ownerId)) && incoming().keys().size() == 3;
+      allow delete: if isSignedIn() && (isOwner(existing().userId) || isOwner(get(/databases/$(database)/documents/groups2/$(groupId)).data.ownerId));
+    }
+
+    function isValidGroupMessage(data) {
+      return data.keys().hasAll(['authorId', 'createdAt']) &&
+             data.authorId is string && data.authorId.size() <= 128 &&
+             (!("content" in data) || (data.content is string && data.content.size() <= 2000)) &&
+             (!("videoURL" in data) || (data.videoURL is string && data.videoURL.size() <= 500)) &&
+             data.createdAt is number;
+    }
+
+    match /groups2/{groupId}/messages/{messageId} {
+      allow read: if isSignedIn() && exists(/databases/$(database)/documents/groups2/$(groupId)/members/$(request.auth.uid));
+      allow create: if isSignedIn() && isValidId(messageId) && isValidGroupMessage(incoming()) && incoming().authorId == request.auth.uid && exists(/databases/$(database)/documents/groups2/$(groupId)/members/$(request.auth.uid)) && incoming().keys().size() <= 4;
+    }
+
+    match /chats2/{chatId}/messages/{messageId} {
+      allow read, write: if isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+    }
+  }
+}
+

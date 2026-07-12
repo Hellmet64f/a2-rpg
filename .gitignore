@@ -1,2 +1,10 @@
-# Ignora arquivos de configuração de chaves públicas do GitHub
-firebase-config.js
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+firebase-applet-config.json
+firebase-blueprint.json

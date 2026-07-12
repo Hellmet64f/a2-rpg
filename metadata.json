@@ -1,0 +1,8 @@
+{
+  "name": "Anime Card Arena",
+  "description": "Jogo de cartas colecionáveis de animes com batalhas em tempo real, mercado de negociações e torneios globais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
